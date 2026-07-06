@@ -1,27 +1,22 @@
 <!doctype html>
-<html lang="fr">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>cmtest</title>
-
   <style>
     :root {
       --plyr-color-main: #00b2ff;
-      --overlay-bg: rgba(0, 0, 0, 0.78);
-      --overlay-text: #ffffff;
-      --overlay-muted: rgba(255, 255, 255, 0.72);
-      --button-bg: #00b2ff;
-      --button-text: #001018;
     }
 
-    html,
-    body {
+    body,
+    html {
       width: 100%;
       height: 100%;
       padding: 0;
       margin: 0;
-      overflow: hidden;
+      overflow-x: hidden;
+      overflow-y: hidden;
       background-color: black;
       font-family: Arial, Helvetica, sans-serif;
     }
@@ -60,59 +55,45 @@
       max-height: 150px;
     }
 
-    #fluxOverlay {
+    #reloadNotice {
       position: absolute;
-      inset: 0;
-      display: none;
-      align-items: center;
-      justify-content: center;
+      right: 12px;
+      bottom: 12px;
       z-index: 20;
-      color: var(--overlay-text);
-      background: var(--overlay-bg);
-      text-align: center;
-      padding: 22px;
-      box-sizing: border-box;
-    }
-
-    #fluxOverlay.is-visible {
       display: flex;
+      gap: 8px;
+      align-items: center;
+      max-width: calc(100% - 24px);
+      padding: 8px 10px;
+      box-sizing: border-box;
+      color: #fff;
+      background: rgba(0, 0, 0, 0.62);
+      border-radius: 999px;
+      font-size: 12px;
+      line-height: 1.3;
     }
 
-    .flux-card {
-      max-width: 520px;
-      padding: 22px;
-      border-radius: 16px;
-      background: rgba(16, 16, 16, 0.88);
-      box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45);
+    #reloadNotice.is-hidden {
+      display: none;
     }
 
-    .flux-card strong {
-      display: block;
-      margin-bottom: 8px;
-      font-size: 18px;
-    }
-
-    #fluxStatus {
-      margin: 0 0 16px;
-      color: var(--overlay-muted);
-      font-size: 14px;
-      line-height: 1.45;
-    }
-
+    #reloadPageBtn,
     #reloadFrameBtn {
       appearance: none;
       border: 0;
       border-radius: 999px;
-      padding: 10px 18px;
-      color: var(--button-text);
-      background: var(--button-bg);
-      font-size: 14px;
+      padding: 7px 10px;
+      color: #001018;
+      background: #00b2ff;
+      font-size: 12px;
       font-weight: 700;
       cursor: pointer;
+      white-space: nowrap;
     }
 
-    #reloadFrameBtn:active {
-      transform: scale(0.98);
+    #reloadFrameBtn {
+      color: #fff;
+      background: rgba(255, 255, 255, 0.18);
     }
 
     @media (max-width: 760px) {
@@ -121,8 +102,13 @@
         max-height: 100px;
       }
 
-      .flux-card {
-        width: 100%;
+      #reloadNotice {
+        right: 8px;
+        bottom: 8px;
+        left: 8px;
+        justify-content: center;
+        border-radius: 14px;
+        flex-wrap: wrap;
       }
     }
   </style>
@@ -133,17 +119,18 @@
     <iframe
       id="streamFrame"
       src="https://dlhd.st/stream/stream-790.php"
+      width="100%"
+      height="100%"
+      frameborder="0"
       allowfullscreen
       loading="lazy"
-      sandbox="allow-scripts allow-same-origin allow-presentation">
+      sandbox="allow-scripts">
     </iframe>
 
-    <div id="fluxOverlay" aria-live="polite">
-      <div class="flux-card">
-        <strong>Flux interrompu</strong>
-        <p id="fluxStatus">Actualisation du cadre en cours…</p>
-        <button id="reloadFrameBtn" type="button">Actualiser maintenant</button>
-      </div>
+    <div id="reloadNotice" aria-live="polite">
+      <span id="reloadText">Si le flux reste noir, relance la page.</span>
+      <button id="reloadPageBtn" type="button">Actualiser la page</button>
+      <button id="reloadFrameBtn" type="button">Relancer le cadre</button>
     </div>
   </div>
 
@@ -151,102 +138,129 @@
     (function () {
       'use strict';
 
-      const STREAM_URL = 'https://dlhd.st/stream/stream-790.php';
-      const LOAD_TIMEOUT_MS = 25000;
-      const MIN_RELOAD_INTERVAL_MS = 8000;
-      const MAX_AUTO_RELOADS = 6;
+      var STREAM_URL = 'https://dlhd.st/stream/stream-790.php';
+      var FRAME_LOAD_TIMEOUT_MS = 45000;
+      var NOTICE_DELAY_MS = 18000;
+      var AUTO_PAGE_RELOAD_DELAY_MS = 55000;
+      var MAX_AUTO_PAGE_RELOADS = 1;
 
-      const frame = document.getElementById('streamFrame');
-      const overlay = document.getElementById('fluxOverlay');
-      const statusText = document.getElementById('fluxStatus');
-      const reloadBtn = document.getElementById('reloadFrameBtn');
+      var frame = document.getElementById('streamFrame');
+      var notice = document.getElementById('reloadNotice');
+      var reloadText = document.getElementById('reloadText');
+      var reloadPageBtn = document.getElementById('reloadPageBtn');
+      var reloadFrameBtn = document.getElementById('reloadFrameBtn');
 
-      let loadTimer = null;
-      let lastReloadAt = 0;
-      let autoReloadCount = 0;
+      var frameLoaded = false;
+      var noticeTimer = null;
+      var frameLoadTimer = null;
+      var autoPageReloadTimer = null;
+      var storageKey = 'stream790AutoReloadCount';
 
-      const watchedErrorParts = [
-        'cors',
-        'cross-origin',
-        'cross-origin request',
-        'access-control-allow-origin',
-        'same origin',
-        'hlsError',
-        'hlsjs',
-        'could not recover from error',
-        'maximum number of attempts',
-        'mono.m3u8',
-        '403',
-        'manque de flux',
-        'flux'
-      ];
-
-      function showOverlay(message) {
-        statusText.textContent = message;
-        overlay.classList.add('is-visible');
+      function getAutoReloadCount() {
+        try {
+          return Number(sessionStorage.getItem(storageKey) || '0');
+        } catch (error) {
+          return 0;
+        }
       }
 
-      function hideOverlay() {
-        overlay.classList.remove('is-visible');
+      function setAutoReloadCount(value) {
+        try {
+          sessionStorage.setItem(storageKey, String(value));
+        } catch (error) {
+          // Session storage may be unavailable in some browsers.
+        }
       }
 
-      function startLoadWatchdog() {
-        window.clearTimeout(loadTimer);
-        loadTimer = window.setTimeout(function () {
-          requestFrameReload('Aucun chargement stable détecté. Actualisation automatique du cadre…', true);
-        }, LOAD_TIMEOUT_MS);
+      function showNotice(message) {
+        reloadText.textContent = message;
+        notice.classList.remove('is-hidden');
       }
 
-      function stopLoadWatchdog() {
-        window.clearTimeout(loadTimer);
-        loadTimer = null;
+      function hideNotice() {
+        notice.classList.add('is-hidden');
       }
 
-      function buildReloadUrl() {
-        const separator = STREAM_URL.includes('?') ? '&' : '?';
-        return STREAM_URL + separator + 'reload=' + Date.now();
-      }
+      function reloadWholePage(reason) {
+        var count = getAutoReloadCount();
 
-      function requestFrameReload(message, automatic) {
-        const now = Date.now();
-
-        if (automatic && autoReloadCount >= MAX_AUTO_RELOADS) {
-          showOverlay('Le flux ne répond toujours pas après plusieurs essais. Utilise le bouton pour relancer le cadre manuellement.');
+        if (count >= MAX_AUTO_PAGE_RELOADS) {
+          showNotice('Le flux ne répond pas. Clique sur “Actualiser la page” pour relancer comme avant.');
           return;
         }
 
-        if (automatic && now - lastReloadAt < MIN_RELOAD_INTERVAL_MS) {
-          return;
-        }
-
-        if (automatic) {
-          autoReloadCount += 1;
-        } else {
-          autoReloadCount = 0;
-        }
-
-        lastReloadAt = now;
-        showOverlay(message || 'Actualisation du cadre en cours…');
-        startLoadWatchdog();
-        frame.src = buildReloadUrl();
+        setAutoReloadCount(count + 1);
+        showNotice(reason || 'Actualisation de la page…');
+        window.location.reload();
       }
 
-      function textContainsWatchedError(value) {
-        const text = String(value || '').toLowerCase();
-        return watchedErrorParts.some(function (part) {
-          return text.includes(part.toLowerCase());
-        });
+      function reloadOnlyFrame() {
+        showNotice('Relance du cadre…');
+
+        // Ne pas ajouter de paramètre ?reload=..., car certains lecteurs refusent les URLs modifiées.
+        frame.src = 'about:blank';
+        window.setTimeout(function () {
+          frameLoaded = false;
+          frame.src = STREAM_URL;
+          startWatchers();
+        }, 350);
       }
 
-      function collectErrorText(event) {
-        const parts = [];
+      function clearWatchers() {
+        window.clearTimeout(noticeTimer);
+        window.clearTimeout(frameLoadTimer);
+        window.clearTimeout(autoPageReloadTimer);
+      }
+
+      function startWatchers() {
+        clearWatchers();
+
+        noticeTimer = window.setTimeout(function () {
+          if (!frameLoaded) {
+            showNotice('Chargement long. Si le flux reste noir, actualise la page.');
+          }
+        }, NOTICE_DELAY_MS);
+
+        frameLoadTimer = window.setTimeout(function () {
+          if (!frameLoaded) {
+            showNotice('Le cadre n’a pas confirmé son chargement. Actualisation possible.');
+          }
+        }, FRAME_LOAD_TIMEOUT_MS);
+
+        autoPageReloadTimer = window.setTimeout(function () {
+          if (!frameLoaded) {
+            reloadWholePage('Flux non chargé. Actualisation automatique de la page…');
+          }
+        }, AUTO_PAGE_RELOAD_DELAY_MS);
+      }
+
+      function errorLooksLikeStreamProblem(value) {
+        var text = String(value || '').toLowerCase();
+        return (
+          text.indexOf('hls') !== -1 ||
+          text.indexOf('m3u8') !== -1 ||
+          text.indexOf('cors') !== -1 ||
+          text.indexOf('cross-origin') !== -1 ||
+          text.indexOf('access-control-allow-origin') !== -1 ||
+          text.indexOf('403') !== -1 ||
+          text.indexOf('fatal') !== -1 ||
+          text.indexOf('network') !== -1 ||
+          text.indexOf('manque de flux') !== -1
+        );
+      }
+
+      function collectEventText(event) {
+        var parts = [];
 
         if (event) {
           parts.push(event.message);
-          parts.push(event.reason && event.reason.message);
-          parts.push(event.reason);
           parts.push(event.filename);
           parts.push(event.type);
+
+          if (event.reason) {
+            parts.push(event.reason.message);
+            parts.push(event.reason);
+          }
 
           if (event.target) {
             parts.push(event.target.src);
@@ -267,46 +281,56 @@
       }
 
       frame.addEventListener('load', function () {
-        stopLoadWatchdog();
-        hideOverlay();
+        frameLoaded = true;
+        clearWatchers();
+        setAutoReloadCount(0);
+
+        window.setTimeout(function () {
+          showNotice('Si le flux se coupe, utilise “Actualiser la page”.');
+        }, 12000);
       });
 
       frame.addEventListener('error', function () {
-        requestFrameReload('Erreur de chargement du cadre. Actualisation automatique…', true);
+        showNotice('Erreur de chargement du cadre. Essaie “Actualiser la page”.');
       });
 
       window.addEventListener('error', function (event) {
-        const errorText = collectErrorText(event);
-        if (textContainsWatchedError(errorText)) {
-          requestFrameReload('Erreur de flux détectée. Actualisation automatique du cadre…', true);
+        var text = collectEventText(event);
+        if (errorLooksLikeStreamProblem(text)) {
+          showNotice('Erreur de flux détectée. Actualisation de la page recommandée.');
         }
       }, true);
 
       window.addEventListener('unhandledrejection', function (event) {
-        const errorText = collectErrorText(event);
-        if (textContainsWatchedError(errorText)) {
-          requestFrameReload('Erreur HLS détectée. Actualisation automatique du cadre…', true);
+        var text = collectEventText(event);
+        if (errorLooksLikeStreamProblem(text)) {
+          showNotice('Erreur HLS détectée. Actualisation de la page recommandée.');
         }
       });
 
       window.addEventListener('message', function (event) {
-        const messageText = collectErrorText(event);
-        if (textContainsWatchedError(messageText)) {
-          requestFrameReload('Message de flux défaillant reçu. Actualisation automatique du cadre…', true);
+        var text = collectEventText(event);
+        if (errorLooksLikeStreamProblem(text)) {
+          reloadWholePage('Message de flux défaillant reçu. Actualisation automatique de la page…');
         }
       });
 
-      reloadBtn.addEventListener('click', function () {
-        requestFrameReload('Actualisation manuelle du cadre…', false);
+      reloadPageBtn.addEventListener('click', function () {
+        setAutoReloadCount(0);
+        window.location.reload();
+      });
+
+      reloadFrameBtn.addEventListener('click', function () {
+        reloadOnlyFrame();
       });
 
       document.addEventListener('visibilitychange', function () {
-        if (!document.hidden) {
-          startLoadWatchdog();
+        if (!document.hidden && !frameLoaded) {
+          startWatchers();
         }
       });
 
-      startLoadWatchdog();
+      startWatchers();
     }());
   </script>
 </body>
