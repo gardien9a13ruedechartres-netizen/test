@@ -1,69 +1,313 @@
-<html lang="en">
+<!doctype html>
+<html lang="fr">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>cmtest</title>
-<style>
-     :root {
-        --plyr-color-main: #00b2ff;
+
+  <style>
+    :root {
+      --plyr-color-main: #00b2ff;
+      --overlay-bg: rgba(0, 0, 0, 0.78);
+      --overlay-text: #ffffff;
+      --overlay-muted: rgba(255, 255, 255, 0.72);
+      --button-bg: #00b2ff;
+      --button-text: #001018;
     }
-    
-    body,
-    html {
-        width: 100%;
-        height: 100%;
-        padding: 0;
-        margin: 0;
-        overflow-x: hidden;
-        overflow-y: hidden;
-        background-color: black;
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      padding: 0;
+      margin: 0;
+      overflow: hidden;
+      background-color: black;
+      font-family: Arial, Helvetica, sans-serif;
     }
-    
+
+    #playerWrap {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      background: #000;
+    }
+
+    #streamFrame {
+      display: block;
+      width: 100%;
+      height: 100%;
+      border: 0;
+      background: #000;
+    }
+
     #dplayer {
-        width: 100%;
-        height: 100%;
+      width: 100%;
+      height: 100%;
     }
-    
+
     .plyr--video {
-        height: 100%;
+      height: 100%;
     }
-    
+
     .dplayer-logo {
-        pointer-events: none;
-        position: absolute;
-        right: 10px;
-        left: auto;
-        top: 10px;
-        max-width: 150px;
-        max-height: 150px;
+      pointer-events: none;
+      position: absolute;
+      right: 10px;
+      left: auto;
+      top: 10px;
+      max-width: 150px;
+      max-height: 150px;
     }
-    
-    @media (max-width:760px) {
-        .dplayer-logo {
-            max-width: 100px;
-            max-height: 100px;
-        }
+
+    #fluxOverlay {
+      position: absolute;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 20;
+      color: var(--overlay-text);
+      background: var(--overlay-bg);
+      text-align: center;
+      padding: 22px;
+      box-sizing: border-box;
     }
-</style>
-  
+
+    #fluxOverlay.is-visible {
+      display: flex;
+    }
+
+    .flux-card {
+      max-width: 520px;
+      padding: 22px;
+      border-radius: 16px;
+      background: rgba(16, 16, 16, 0.88);
+      box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45);
+    }
+
+    .flux-card strong {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 18px;
+    }
+
+    #fluxStatus {
+      margin: 0 0 16px;
+      color: var(--overlay-muted);
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    #reloadFrameBtn {
+      appearance: none;
+      border: 0;
+      border-radius: 999px;
+      padding: 10px 18px;
+      color: var(--button-text);
+      background: var(--button-bg);
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    #reloadFrameBtn:active {
+      transform: scale(0.98);
+    }
+
+    @media (max-width: 760px) {
+      .dplayer-logo {
+        max-width: 100px;
+        max-height: 100px;
+      }
+
+      .flux-card {
+        width: 100%;
+      }
+    }
+  </style>
 </head>
 
 <body>
-<iframe src="https://dlhd.st/stream/stream-790.php" width="100%" height="100%" frameborder="0" allowfullscreen loading="lazy"
- sandbox="allow-scripts">
-</iframe>
-  <script>
-  // server-side helper (example)
-function getStreamUrl($channel_id, $type = 'stream'){
-    $allowed = ['stream','cast','watch','plus','casting','player'];
-    $type = in_array($type, $allowed) ? $type : 'stream';
-    $baseUrl = 'https://codepen.io/pen'; // Your current domain
-    // Note: filename is always stream-.php inside each folder
-    return $baseUrl . "/{$type}/stream-{$channel_id}.php";
-}
+  <div id="playerWrap">
+    <iframe
+      id="streamFrame"
+      src="https://dlhd.st/stream/stream-790.php"
+      allowfullscreen
+      loading="lazy"
+      sandbox="allow-scripts allow-same-origin allow-presentation">
+    </iframe>
 
-// iframe example (HTML)
-// Responsive wrapper is provided below — copy and paste into your site where you want the player to appear.
+    <div id="fluxOverlay" aria-live="polite">
+      <div class="flux-card">
+        <strong>Flux interrompu</strong>
+        <p id="fluxStatus">Actualisation du cadre en cours…</p>
+        <button id="reloadFrameBtn" type="button">Actualiser maintenant</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      'use strict';
+
+      const STREAM_URL = 'https://dlhd.st/stream/stream-790.php';
+      const LOAD_TIMEOUT_MS = 25000;
+      const MIN_RELOAD_INTERVAL_MS = 8000;
+      const MAX_AUTO_RELOADS = 6;
+
+      const frame = document.getElementById('streamFrame');
+      const overlay = document.getElementById('fluxOverlay');
+      const statusText = document.getElementById('fluxStatus');
+      const reloadBtn = document.getElementById('reloadFrameBtn');
+
+      let loadTimer = null;
+      let lastReloadAt = 0;
+      let autoReloadCount = 0;
+
+      const watchedErrorParts = [
+        'cors',
+        'cross-origin',
+        'cross-origin request',
+        'access-control-allow-origin',
+        'same origin',
+        'hlsError',
+        'hlsjs',
+        'could not recover from error',
+        'maximum number of attempts',
+        'mono.m3u8',
+        '403',
+        'manque de flux',
+        'flux'
+      ];
+
+      function showOverlay(message) {
+        statusText.textContent = message;
+        overlay.classList.add('is-visible');
+      }
+
+      function hideOverlay() {
+        overlay.classList.remove('is-visible');
+      }
+
+      function startLoadWatchdog() {
+        window.clearTimeout(loadTimer);
+        loadTimer = window.setTimeout(function () {
+          requestFrameReload('Aucun chargement stable détecté. Actualisation automatique du cadre…', true);
+        }, LOAD_TIMEOUT_MS);
+      }
+
+      function stopLoadWatchdog() {
+        window.clearTimeout(loadTimer);
+        loadTimer = null;
+      }
+
+      function buildReloadUrl() {
+        const separator = STREAM_URL.includes('?') ? '&' : '?';
+        return STREAM_URL + separator + 'reload=' + Date.now();
+      }
+
+      function requestFrameReload(message, automatic) {
+        const now = Date.now();
+
+        if (automatic && autoReloadCount >= MAX_AUTO_RELOADS) {
+          showOverlay('Le flux ne répond toujours pas après plusieurs essais. Utilise le bouton pour relancer le cadre manuellement.');
+          return;
+        }
+
+        if (automatic && now - lastReloadAt < MIN_RELOAD_INTERVAL_MS) {
+          return;
+        }
+
+        if (automatic) {
+          autoReloadCount += 1;
+        } else {
+          autoReloadCount = 0;
+        }
+
+        lastReloadAt = now;
+        showOverlay(message || 'Actualisation du cadre en cours…');
+        startLoadWatchdog();
+        frame.src = buildReloadUrl();
+      }
+
+      function textContainsWatchedError(value) {
+        const text = String(value || '').toLowerCase();
+        return watchedErrorParts.some(function (part) {
+          return text.includes(part.toLowerCase());
+        });
+      }
+
+      function collectErrorText(event) {
+        const parts = [];
+
+        if (event) {
+          parts.push(event.message);
+          parts.push(event.reason && event.reason.message);
+          parts.push(event.reason);
+          parts.push(event.filename);
+          parts.push(event.type);
+
+          if (event.target) {
+            parts.push(event.target.src);
+            parts.push(event.target.href);
+            parts.push(event.target.currentSrc);
+          }
+
+          if (event.data) {
+            try {
+              parts.push(JSON.stringify(event.data));
+            } catch (error) {
+              parts.push(String(event.data));
+            }
+          }
+        }
+
+        return parts.filter(Boolean).join(' ');
+      }
+
+      frame.addEventListener('load', function () {
+        stopLoadWatchdog();
+        hideOverlay();
+      });
+
+      frame.addEventListener('error', function () {
+        requestFrameReload('Erreur de chargement du cadre. Actualisation automatique…', true);
+      });
+
+      window.addEventListener('error', function (event) {
+        const errorText = collectErrorText(event);
+        if (textContainsWatchedError(errorText)) {
+          requestFrameReload('Erreur de flux détectée. Actualisation automatique du cadre…', true);
+        }
+      }, true);
+
+      window.addEventListener('unhandledrejection', function (event) {
+        const errorText = collectErrorText(event);
+        if (textContainsWatchedError(errorText)) {
+          requestFrameReload('Erreur HLS détectée. Actualisation automatique du cadre…', true);
+        }
+      });
+
+      window.addEventListener('message', function (event) {
+        const messageText = collectErrorText(event);
+        if (textContainsWatchedError(messageText)) {
+          requestFrameReload('Message de flux défaillant reçu. Actualisation automatique du cadre…', true);
+        }
+      });
+
+      reloadBtn.addEventListener('click', function () {
+        requestFrameReload('Actualisation manuelle du cadre…', false);
+      });
+
+      document.addEventListener('visibilitychange', function () {
+        if (!document.hidden) {
+          startLoadWatchdog();
+        }
+      });
+
+      startLoadWatchdog();
+    }());
   </script>
 </body>
-
 </html>
