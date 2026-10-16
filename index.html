@@ -1,238 +1,39 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html lang="fr">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>cmtest</title>
+  <title>Lecteur plein écran</title>
   <style>
-    :root {
-      --plyr-color-main: #00b2ff;
-    }
-
-    body,
-    html {
+    html,
+    body {
       width: 100%;
       height: 100%;
-      padding: 0;
       margin: 0;
-      overflow-x: hidden;
-      overflow-y: hidden;
-      background-color: black;
-    }
-
-    #playerWrap {
-      position: relative;
-      width: 100%;
-      height: 100%;
+      padding: 0;
+      overflow: hidden;
       background: #000;
     }
 
-    #streamFrame {
+    iframe {
       display: block;
-      width: 100%;
-      height: 100%;
+      width: 100vw;
+      height: 100vh;
       border: 0;
-      background: #000;
-    }
-
-    #dplayer {
-      width: 100%;
-      height: 100%;
-    }
-
-    .plyr--video {
-      height: 100%;
-    }
-
-    .dplayer-logo {
-      pointer-events: none;
-      position: absolute;
-      right: 10px;
-      left: auto;
-      top: 10px;
-      max-width: 150px;
-      max-height: 150px;
-    }
-
-    @media (max-width: 760px) {
-      .dplayer-logo {
-        max-width: 100px;
-        max-height: 100px;
-      }
     }
   </style>
 </head>
-
 <body>
-  <div id="playerWrap">
-    <iframe
-      id="streamFrame"
-      src="https://dlhd.st/stream/stream-790.php"
-      width="100%"
-      height="100%"
-      frameborder="0"
-      allowfullscreen
-      loading="lazy"
-      sandbox="allow-scripts">
-    </iframe>
-  </div>
-
-  <script>
-    (function () {
-      'use strict';
-
-      var STREAM_URL = 'https://dlhd.st/stream/stream-790.php';
-
-      // Délais prudents : on laisse le player essayer de récupérer le flux avant d'agir.
-      var FIRST_LOAD_TIMEOUT_MS = 65000;
-      var ERROR_RELOAD_DELAY_MS = 12000;
-      var MAX_AUTO_RELOADS_PER_SESSION = 1;
-
-      var frame = document.getElementById('streamFrame');
-      var firstLoadTimer = null;
-      var errorReloadTimer = null;
-      var frameLoaded = false;
-      var storageKey = 'stream790SilentAutoReloadCount';
-
-      function getReloadCount() {
-        try {
-          return Number(sessionStorage.getItem(storageKey) || '0');
-        } catch (error) {
-          return 0;
-        }
-      }
-
-      function setReloadCount(value) {
-        try {
-          sessionStorage.setItem(storageKey, String(value));
-        } catch (error) {
-          // Certains navigateurs peuvent bloquer sessionStorage en contexte strict.
-        }
-      }
-
-      function canAutoReload() {
-        return getReloadCount() < MAX_AUTO_RELOADS_PER_SESSION;
-      }
-
-      function reloadWholePage() {
-        if (!canAutoReload()) {
-          return;
-        }
-
-        setReloadCount(getReloadCount() + 1);
-        window.location.reload();
-      }
-
-      function scheduleReload(delay) {
-        if (!canAutoReload()) {
-          return;
-        }
-
-        window.clearTimeout(errorReloadTimer);
-        errorReloadTimer = window.setTimeout(function () {
-          reloadWholePage();
-        }, delay || ERROR_RELOAD_DELAY_MS);
-      }
-
-      function errorLooksLikeStreamProblem(value) {
-        var text = String(value || '').toLowerCase();
-        return (
-          text.indexOf('hls') !== -1 ||
-          text.indexOf('m3u8') !== -1 ||
-          text.indexOf('cors') !== -1 ||
-          text.indexOf('cross-origin') !== -1 ||
-          text.indexOf('access-control-allow-origin') !== -1 ||
-          text.indexOf('403') !== -1 ||
-          text.indexOf('fatal') !== -1 ||
-          text.indexOf('network') !== -1 ||
-          text.indexOf('unrecoverable') !== -1 ||
-          text.indexOf('could not recover') !== -1 ||
-          text.indexOf('manque de flux') !== -1
-        );
-      }
-
-      function collectEventText(event) {
-        var parts = [];
-
-        if (event) {
-          parts.push(event.message);
-          parts.push(event.filename);
-          parts.push(event.type);
-
-          if (event.reason) {
-            parts.push(event.reason.message);
-            parts.push(event.reason);
-          }
-
-          if (event.target) {
-            parts.push(event.target.src);
-            parts.push(event.target.href);
-            parts.push(event.target.currentSrc);
-          }
-
-          if (event.data) {
-            try {
-              parts.push(JSON.stringify(event.data));
-            } catch (error) {
-              parts.push(String(event.data));
-            }
-          }
-        }
-
-        return parts.filter(Boolean).join(' ');
-      }
-
-      function startFirstLoadWatcher() {
-        window.clearTimeout(firstLoadTimer);
-
-        firstLoadTimer = window.setTimeout(function () {
-          if (!frameLoaded) {
-            reloadWholePage();
-          }
-        }, FIRST_LOAD_TIMEOUT_MS);
-      }
-
-      frame.addEventListener('load', function () {
-        frameLoaded = true;
-        window.clearTimeout(firstLoadTimer);
-
-        // Si le player arrive à charger une fois, on autorise une future récupération dans la même session.
-        setReloadCount(0);
-      });
-
-      frame.addEventListener('error', function () {
-        scheduleReload(ERROR_RELOAD_DELAY_MS);
-      });
-
-      window.addEventListener('error', function (event) {
-        var text = collectEventText(event);
-        if (errorLooksLikeStreamProblem(text)) {
-          scheduleReload(ERROR_RELOAD_DELAY_MS);
-        }
-      }, true);
-
-      window.addEventListener('unhandledrejection', function (event) {
-        var text = collectEventText(event);
-        if (errorLooksLikeStreamProblem(text)) {
-          scheduleReload(ERROR_RELOAD_DELAY_MS);
-        }
-      });
-
-      window.addEventListener('message', function (event) {
-        var text = collectEventText(event);
-        if (errorLooksLikeStreamProblem(text)) {
-          scheduleReload(ERROR_RELOAD_DELAY_MS);
-        }
-      });
-
-      document.addEventListener('visibilitychange', function () {
-        if (!document.hidden && !frameLoaded) {
-          startFirstLoadWatcher();
-        }
-      });
-
-      startFirstLoadWatcher();
-    }());
-  </script>
+  <iframe
+    src="//amazingtier.top/player/CMTVPT"
+    width="100%"
+    height="100%"
+    allow="encrypted-media"
+    class="embed-responsive-item"
+    allowfullscreen="yes"
+    scrolling="no"
+    frameborder="0"
+    sandbox="allow-scripts allow-popups allow-forms">
+  </iframe>
 </body>
 </html>
